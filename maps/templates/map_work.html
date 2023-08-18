@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Find Areas Near You</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css">
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+        #map {
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        var map = L.map('map').setView([37.0902, -95.7129], 5);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        var markersLayer = new L.LayerGroup().addTo(map);
+        var socket = io.connect('http://' + document.domain + ':' + location.port);
+        
+        var markerCounter = 1; // Initialize the marker counter
+
+        function updateMarkerLabels() {
+            var i = 1;
+            markersLayer.eachLayer(function(marker) {
+                marker.getPopup().setContent(`Marker ${i}<br>${marker.getPopup().getContent()}`);
+                i++;
+            });
+        }
+
+        function addClientMarker(lat, lng, name, event, time) {
+            var marker = L.marker([lat, lng]).addTo(markersLayer);
+            marker.bindPopup(`Name: ${name}<br>Event: ${event}<br>Time: ${time}<br>Latitude: ${lat}<br>Longitude: ${lng}`)
+                .openPopup();
+            
+            // Attach right-click event to the marker for deletion
+            marker.on('contextmenu', function() {
+                deleteMarker(marker);
+            });
+
+            return marker;
+        }
+
+        // Load markers from local storage
+        function loadMarkersFromLocalStorage() {
+            var storedMarkers = JSON.parse(localStorage.getItem('markers'));
+            if (storedMarkers) {
+                storedMarkers.forEach(function(markerData) {
+                    var marker = addClientMarker(markerData.lat, markerData.lng, markerData.name, markerData.event, markerData.time);
+                    markerCounter = Math.max(markerCounter, markerData.id + 1);
+                });
+            }
+        }
+
+        // Add marker on map click
+        map.on('click', function(e) {
+            var lat = e.latlng.lat.toFixed(6);
+            var lng = e.latlng.lng.toFixed(6);
+            var name = prompt('Enter the name for the marker:');
+            var event = prompt('Enter the event:');
+            var time = prompt('Enter the time:');
+
+            if (name && name.trim() && event && event.trim() && time && time.trim()) {
+                var marker = addClientMarker(lat, lng, name, event, time);
+
+                // Save markers to local storage
+                saveMarkersToLocalStorage();
+
+                marker.getPopup().setContent(`Marker ${markerCounter}<br>${marker.getPopup().getContent()}`);
+                markerCounter++; // Increment the marker counter
+            }
+        });
+
+        function deleteMarker(marker) {
+            var markerLatLng = marker.getLatLng();
+            markersLayer.removeLayer(marker);
+            socket.emit('delete_marker', { 'lat': markerLatLng.lat, 'lng': markerLatLng.lng });
+            updateMarkerLabels();
+            markerCounter--; // Decrement the marker counter
+            saveMarkersToLocalStorage(); // Save markers after deletion
+        }
+
+        function saveMarkersToLocalStorage() {
+            var markers = [];
+            markersLayer.eachLayer(function(marker) {
+                markers.push({
+                    id: marker._leaflet_id,
+                    lat: marker.getLatLng().lat,
+                    lng: marker.getLatLng().lng,
+                    name: marker.getPopup().getContent().split('<br>')[1].split(': ')[1],
+                    event: marker.getPopup().getContent().split('<br>')[2].split(': ')[1],
+                    time: marker.getPopup().getContent().split('<br>')[3].split(': ')[1]
+                });
+            });
+            localStorage.setItem('markers', JSON.stringify(markers));
+        }
+
+        socket.on('connect', function() {
+            socket.emit('get_markers');
+        });
+
+        socket.on('new_marker', function(data) {
+            var { lat, lng, name, event, time } = data;
+            addClientMarker(lat, lng, name, event, time);
+            saveMarkersToLocalStorage();
+        });
+
+        socket.on('marker_deleted', function(data) {
+            var { lat, lng } = data;
+            markersLayer.eachLayer(function(marker) {
+                var markerLatLng = marker.getLatLng();
+                if (markerLatLng.lat === lat && markerLatLng.lng === lng) {
+                    markersLayer.removeLayer(marker);
+                }
+            });
+            updateMarkerLabels();
+            saveMarkersToLocalStorage();
+        });
+
+        // Load markers from local storage when the page loads
+        loadMarkersFromLocalStorage();
+    </script>
+</body>
+</html>
